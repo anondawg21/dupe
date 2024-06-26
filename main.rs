@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
 use walkdir::WalkDir;
 use twox_hash::XxHash64;
@@ -19,34 +19,43 @@ fn calculate_file_hash(file_path: &str) -> io::Result<u64> {
     Ok(hasher.finish())
 }
 
-fn find_duplicate_files(directory_path: &str) -> io::Result<Vec<String>> {
+fn find_duplicate_files(directory_path: &str) -> io::Result<HashMap<u64, Vec<String>>> {
     let mut file_hashes: HashMap<u64, Vec<String>> = HashMap::new();
-    let mut duplicate_files: Vec<String> = Vec::new();
 
-    for entry in WalkDir::new(directory_path).into_iter().filter_map(Result::ok).filter(|entry| entry.path().is_file()) {
+    for entry in WalkDir::new(directory_path)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_file()) 
+    {
         let file_path = entry.path().to_str().unwrap();
 
         match calculate_file_hash(file_path) {
             Ok(file_hash) => {
-                if let Some(paths) = file_hashes.get_mut(&file_hash) {
-                    paths.push(file_path.to_string());
-                    duplicate_files.push(file_path.to_string());
-                } else {
-                    file_hashes.insert(file_hash, vec![file_path.to_string()]);
-                }
+                file_hashes
+                    .entry(file_hash)
+                    .or_insert_with(Vec::new)
+                    .push(file_path.to_string());
             },
             Err(error) => eprintln!("Error hashing file {}: {}", file_path, error),
         }
     }
 
-    // Print all files with the same hash
-    for (hash, paths) in file_hashes.iter() {
+    Ok(file_hashes)
+}
+
+fn delete_duplicate_files(file_hashes: &HashMap<u64, Vec<String>>) {
+    for (hash, paths) in file_hashes {
         if paths.len() > 1 {
-            println!("Files with hash {}: {:?}", hash, paths);
+            println!("\nFiles with same hash {}:\n{}", hash, paths.join("\n"));
+            for path in &paths[1..] {
+                if let Err(error) = fs::remove_file(path) {
+                    eprintln!("Error deleting file {}: {}", path, error);
+                } else {
+                    println!("Deleted duplicate file: {}", path);
+                }
+            }
         }
     }
-
-    Ok(duplicate_files)
 }
 
 fn main() {
@@ -59,56 +68,27 @@ fn main() {
     let directory_path = &command_line_args[1];
 
     match find_duplicate_files(directory_path) {
-        Ok(duplicate_files) => {
-            if duplicate_files.is_empty() {
+        Ok(file_hashes) => {
+            let mut duplicates_found = false;
+            for (hash, paths) in &file_hashes {
+                if paths.len() > 1 {
+                    duplicates_found = true;
+                    println!("\nFiles with same hash {}:\n{}", hash, paths.join("\n"));
+                }
+            }
+            if !duplicates_found {
                 println!("No duplicate files found.");
             } else {
-                println!("Duplicate files found:");
-                for duplicate_file in duplicate_files {
-                    println!("{}", duplicate_file);
+                println!("Would you like to delete the duplicate files? (yes/no): ");
+                let mut input = String::new();
+                io::stdin().read_line(&mut input).expect("Failed to read line");
+                if input.trim().eq_ignore_ascii_case("yes") {
+                    delete_duplicate_files(&file_hashes);
+                } else {
+                    println!("Duplicate files not deleted.");
                 }
             }
         },
         Err(error) => eprintln!("Error: {}", error),
     }
 }
-
-// use std::fs::{self, File};
-// use std::io::Write;
-// use std::path::Path;
-// use rand::Rng;
-// use rand::distributions::Alphanumeric;
-
-// fn create_random_text_file(directory: &Path, file_number: usize) -> std::io::Result<()> {
-//     let file_name = format!("file_{}.txt", file_number);
-//     let file_path = directory.join(file_name);
-//     let mut file = File::create(file_path)?;
-
-//     let random_content: String = rand::thread_rng()
-//         .sample_iter(&Alphanumeric)
-//         .take(100)  // Change this value to increase or decrease the length of the content
-//         .map(char::from)
-//         .collect();
-
-//     file.write_all(random_content.as_bytes())?;
-//     Ok(())
-// }
-
-// fn main() -> std::io::Result<()> {
-//     let directory = Path::new("/projects/web-nodejs-sample/duplicate_file_analyzer/public/folder3/folder3-2");
-
-//     // Create the directory if it doesn't exist
-//     if !directory.exists() {
-//         fs::create_dir_all(directory)?;
-//     }
-
-//     // Number of text files to create
-//     let num_files = 10;
-
-//     for i in 0..num_files {
-//         create_random_text_file(&directory, i)?;
-//     }
-
-//     println!("Created {} text files in {:?}", num_files, directory);
-//     Ok(())
-// }
